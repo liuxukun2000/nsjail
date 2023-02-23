@@ -75,6 +75,19 @@ ssize_t readFromFile(const char* fname, void* buf, size_t len) {
 	return ret;
 }
 
+bool readUInt64(const std::string& filename, uint64_t* value) {
+	char buf[32];
+	ssize_t len = readFromFile(filename.c_str(), buf, sizeof(buf) - 1);
+	if (len == -1) {
+		LOG_W("Fail to read from %s", filename.c_str());
+		return false;
+	}
+	buf[len] = '\0';
+	LOG_D("Read from %s: %s", filename.c_str(), buf);
+	*value = strtoull(buf, NULL, 10);
+	return true;
+}
+
 bool writeToFd(int fd, const void* buf, size_t len) {
 	const uint8_t* charbuf = (const uint8_t*)buf;
 

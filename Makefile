@@ -26,16 +26,16 @@ CXX ?= g++
 
 COMMON_FLAGS += -O2 -c \
 	-D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 \
-	-fPIE \
+	-fPIC \
 	-Wformat -Wformat-security -Wno-format-nonliteral \
 	-Wall -Wextra -Werror \
 	-Ikafel/include
 
 CXXFLAGS += $(USER_DEFINES) $(COMMON_FLAGS) $(shell pkg-config --cflags protobuf) \
 	-std=c++14 -fno-exceptions -Wno-unused -Wno-unused-parameter
-LDFLAGS += -pie -Wl,-z,noexecstack -lpthread $(shell pkg-config --libs protobuf)
+LDFLAGS += -shared -Wl,-z,noexecstack -lpthread $(shell pkg-config --libs protobuf)
 
-BIN = nsjail
+BIN = libnsjail.so
 LIBS = kafel/libkafel.a
 SRCS_CXX = caps.cc cgroup.cc cgroup2.cc cmdline.cc config.cc contain.cc cpu.cc logs.cc mnt.cc net.cc nsjail.cc pid.cc sandbox.cc subproc.cc uts.cc user.cc util.cc
 SRCS_PROTO = config.proto

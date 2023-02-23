@@ -89,7 +89,9 @@ struct custom_option custom_opts[] = {
     { { "max_conns_per_ip", required_argument, NULL, 'i' }, "Maximum number of connections per one IP (only in [MODE_LISTEN_TCP]), (default: 0 (unlimited))" },
     { { "log", required_argument, NULL, 'l' }, "Log file (default: use log_fd)" },
     { { "log_fd", required_argument, NULL, 'L' }, "Log FD (default: 2)" },
-    { { "time_limit", required_argument, NULL, 't' }, "Maximum time that a jail can exist, in seconds (default: 600)" },
+    { { "report", required_argument, NULL, 'f'}, "Report time usage, memory usage, exit code, and exit signal to file (default: report disabled)" },
+    { { "report_fd", required_argument, NULL, 'F'}, "Report time usage, memory usage, exit code, and exit signal to FD (default: report disabled)" },
+	{ { "time_limit", required_argument, NULL, 't' }, "Maximum time that a jail can exist, in seconds (default: 600)" },
     { { "max_cpus", required_argument, NULL, 0x508 }, "Maximum number of CPUs a single jailed process can use (default: 0 'no limit')" },
     { { "daemon", no_argument, NULL, 'd' }, "Daemonize after start" },
     { { "verbose", no_argument, NULL, 'v' }, "Verbose output" },
@@ -100,7 +102,10 @@ struct custom_option custom_opts[] = {
     { { "keep_caps", no_argument, NULL, 0x0501 }, "Don't drop any capabilities" },
     { { "cap", required_argument, NULL, 0x0509 }, "Retain this capability, e.g. CAP_PTRACE (can be specified multiple times)" },
     { { "silent", no_argument, NULL, 0x0502 }, "Redirect child process' fd:0/1/2 to /dev/null" },
-    { { "stderr_to_null", no_argument, NULL, 0x0503 }, "Redirect child process' fd:2 (STDERR_FILENO) to /dev/null" },
+    { { "stdin", required_argument, NULL, 0x050a }, "Redirect stdin (fd:0) to file" },
+    { { "stdout", required_argument, NULL, 0x050b }, "Redirect stdout (fd:2) to file" },
+    { { "stderr", required_argument, NULL, 0x050c }, "Redirect stderr (fd:3) to file" },
+	{ { "stderr_to_null", no_argument, NULL, 0x0503 }, "Redirect child process' fd:2 (STDERR_FILENO) to /dev/null" },
     { { "skip_setsid", no_argument, NULL, 0x0504 }, "Don't call setsid(), allows for terminal signal handling in the sandboxed process. Dangerous" },
     { { "pass_fd", required_argument, NULL, 0x0505 }, "Don't close this FD before executing the child process (can be specified multiple times), by default: 0/1/2 are kept open" },
     { { "disable_no_new_privs", no_argument, NULL, 0x0507 }, "Don't set the prctl(NO_NEW_PRIVS, 1) (DANGEROUS)" },
@@ -156,7 +161,9 @@ struct custom_option custom_opts[] = {
     { { "cgroup_cpu_ms_per_sec", required_argument, NULL, 0x0831 }, "Number of milliseconds of CPU time per second that the process group can use (default: '0' - no limit)" },
     { { "cgroup_cpu_mount", required_argument, NULL, 0x0832 }, "Location of cpu cgroup FS (default: '/sys/fs/cgroup/cpu')" },
     { { "cgroup_cpu_parent", required_argument, NULL, 0x0833 }, "Which pre-existing cpu cgroup to use as a parent (default: 'NSJAIL')" },
-    { { "cgroupv2_mount", required_argument, NULL, 0x0834}, "Location of cgroupv2 directory (default: '/sys/fs/cgroup')"},
+    { { "cgroup_cpuacct_mount", required_argument, NULL, 0x0824 }, "Location of cpuacct cgroup FS (default: '/sys/fs/cgroup/cpuacct')" },
+	{ { "cgroup_cpuacct_parent", required_argument, NULL, 0x0825 }, "Which pre-existing cpuacct cgroup to use as a parent (default: 'NSJAIL')" },
+	{ { "cgroupv2_mount", required_argument, NULL, 0x0834}, "Location of cgroupv2 directory (default: '/sys/fs/cgroup')"},
     { { "use_cgroupv2", no_argument, NULL, 0x0835}, "Use cgroup v2"},
     { { "detect_cgroupv2", no_argument, NULL, 0x0836}, "Use cgroupv2, if it is available. (Specify instead of use_cgroupv2)"},
     { { "iface_no_lo", no_argument, NULL, 0x700 }, "Don't bring the 'lo' interface up" },
@@ -453,6 +460,7 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 	nsjconf->is_root_rw = false;
 	nsjconf->is_silent = false;
 	nsjconf->stderr_to_null = false;
+	nsjconf->report_enabled = false;
 	nsjconf->skip_setsid = false;
 	nsjconf->max_conns = 0;
 	nsjconf->max_conns_per_ip = 0;
@@ -471,6 +479,8 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 	nsjconf->cgroup_net_cls_classid = 0U;
 	nsjconf->cgroup_cpu_mount = "/sys/fs/cgroup/cpu";
 	nsjconf->cgroup_cpu_parent = "NSJAIL";
+	nsjconf->cgroup_cpuacct_mount = "/sys/fs/cgroup/cpuacct";
+	nsjconf->cgroup_cpuacct_parent = "NSJAIL";
 	nsjconf->cgroup_cpu_ms_per_sec = 0U;
 	nsjconf->cgroupv2_mount = "/sys/fs/cgroup";
 	nsjconf->use_cgroupv2 = false;
@@ -507,7 +517,7 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 	int opt_index = 0;
 	for (;;) {
 		int c = getopt_long(argc, argv,
-		    "x:H:D:C:c:p:i:u:g:l:L:t:M:NdvqQeh?E:R:B:T:m:s:P:I:U:G:", opts, &opt_index);
+		    "x:H:D:C:c:p:i:u:g:l:L:f:F:t:M:NdvqQeh?E:R:B:T:m:s:P:I:U:G:", opts, &opt_index);
 		if (c == -1) {
 			break;
 		}
@@ -551,6 +561,14 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 			break;
 		case 'L':
 			logs::logFile("", std::strtol(optarg, NULL, 0));
+			break;
+		case 'f':
+			logs::setReportFile(optarg);
+			nsjconf->report_enabled = true;
+			break;
+		case 'F':
+			logs::setReportFd(static_cast<int>(std::strtol(optarg, NULL, 0)));
+			nsjconf->report_enabled = true;
 			break;
 		case 'd':
 			nsjconf->daemonize = true;
@@ -674,6 +692,15 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 			}
 			nsjconf->caps.push_back(cap);
 		} break;
+		case 0x050a:
+		    nsjconf->stdin_path = optarg;
+		    break;
+        case 0x050b:
+            nsjconf->stdout_path = optarg;
+            break;
+        case 0x050c:
+            nsjconf->stderr_path = optarg;
+            break;
 		case 0x0600:
 			nsjconf->no_pivotroot = true;
 			break;
@@ -898,6 +925,12 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 			break;
 		case 0x823:
 			nsjconf->cgroup_net_cls_parent = optarg;
+			break;
+		case 0x824:
+			nsjconf->cgroup_cpuacct_mount = optarg;
+			break;
+		case 0x825:
+			nsjconf->cgroup_cpuacct_parent = optarg;
 			break;
 		case 0x831:
 			nsjconf->cgroup_cpu_ms_per_sec = (unsigned int)strtoul(optarg, NULL, 0);
