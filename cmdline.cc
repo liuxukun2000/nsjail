@@ -42,6 +42,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <cstddef>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -60,14 +61,14 @@ namespace cmdline {
 #define _LOG_DEFAULT_FILE "/var/log/nsjail.log"
 
 struct custom_option {
-	struct option opt;
-	const char* descr;
+	const struct option opt;
+	const char *const descr;
 };
 
 // clang-format off
-struct custom_option custom_opts[] = {
-    { { "help", no_argument, NULL, 'h' }, "Help plz.." },
-    { { "mode", required_argument, NULL, 'M' },
+static const struct custom_option custom_opts[] = {
+    { { "help", no_argument, nullptr, 'h' }, "Help plz.." },
+    { { "mode", required_argument, nullptr, 'M' },
         "Execution mode (default: 'o' [MODE_STANDALONE_ONCE]):\n"
         "\tl: Wait for connections on a TCP port (specified with --port) [MODE_LISTEN_TCP]\n"
         "\to: Launch a single process on the console using clone/execve [MODE_STANDALONE_ONCE]\n"
@@ -179,11 +180,55 @@ struct custom_option custom_opts[] = {
 };
 // clang-format on
 
-static const char* logYesNo(bool yes) {
+static const char *logYesNo(bool yes) {
 	return (yes ? "true" : "false");
 }
 
-static void cmdlineOptUsage(struct custom_option* option) {
+size_t GetConsoleLength(const std::string &str) {
+	int result = 0;
+	for (char c : str) {
+		if (c == '\t') {
+			result += 8;
+		} else {
+			++result;
+		}
+	}
+	return result;
+}
+
+std::string FormatLine(const std::string &line, size_t max_len = 80) {
+	std::string indent = line.substr(0, line.find_first_not_of(" \t"));
+	size_t indent_len = GetConsoleLength(indent);
+	size_t cursor = 0;
+	std::string formatted;
+	std::vector<std::string> words = util::strSplit(line.c_str(), ' ');
+	for (const auto &word : words) {
+		size_t wlen = GetConsoleLength(word);
+		std::string separator = cursor == 0 ? "" : " ";
+		size_t slen = GetConsoleLength(separator);
+		if (cursor != 0 && cursor + slen + wlen >= max_len) {
+			util::StrAppend(&formatted, "\n");
+			cursor = 0;
+			separator = indent;
+			slen = indent_len;
+		}
+		util::StrAppend(&formatted, "%s%s", separator.c_str(), word.c_str());
+		cursor += slen + wlen;
+	}
+	return formatted;
+}
+
+std::string FormatDescription(const char *descr) {
+	std::string formatted;
+	std::vector<std::string> lines = util::strSplit(descr, '\n');
+
+	for (const auto &line : lines) {
+		util::StrAppend(&formatted, "%s\n", FormatLine(std::string("\t") + line).c_str());
+	}
+	return formatted;
+}
+
+static void cmdlineOptUsage(const struct custom_option *option) {
 	if (option->opt.val < 0x80) {
 		LOG_HELP_BOLD(" --%s%s%c %s", option->opt.name, "|-", option->opt.val,
 		    option->opt.has_arg == required_argument ? "VALUE" : "");
@@ -191,10 +236,10 @@ static void cmdlineOptUsage(struct custom_option* option) {
 		LOG_HELP_BOLD(" --%s %s", option->opt.name,
 		    option->opt.has_arg == required_argument ? "VALUE" : "");
 	}
-	LOG_HELP("\t%s", option->descr);
+	LOG_HELP("%s", FormatDescription(option->descr).c_str());
 }
 
-static void cmdlineUsage(const char* pname) {
+static void cmdlineUsage(const char *pname) {
 	LOG_HELP_BOLD("Usage: %s [options] -- path_to_command [args]", pname);
 	LOG_HELP_BOLD("Options:");
 	for (size_t i = 0; i < ARR_SZ(custom_opts); i++) {
@@ -211,12 +256,12 @@ static void cmdlineUsage(const char* pname) {
 	LOG_HELP_BOLD("  nsjail -Me --chroot / --disable_proc -- /bin/echo \"ABC\"");
 }
 
-void addEnv(nsjconf_t* nsjconf, const std::string& env) {
+void addEnv(nsjconf_t *nsjconf, const std::string &env) {
 	if (env.find('=') != std::string::npos) {
 		nsjconf->envs.push_back(env);
 		return;
 	}
-	char* e = getenv(env.c_str());
+	char *e = getenv(env.c_str());
 	if (!e) {
 		LOG_W("Requested to use the %s envar, but it's not set. It'll be ignored", QC(env));
 		return;
@@ -224,7 +269,7 @@ void addEnv(nsjconf_t* nsjconf, const std::string& env) {
 	nsjconf->envs.push_back(std::string(env).append("=").append(e));
 }
 
-void logParams(nsjconf_t* nsjconf) {
+void logParams(nsjconf_t *nsjconf) {
 	switch (nsjconf->mode) {
 	case MODE_LISTEN_TCP:
 		LOG_I("Mode: LISTEN_TCP");
@@ -243,13 +288,15 @@ void logParams(nsjconf_t* nsjconf) {
 		break;
 	}
 
-	LOG_I(
-	    "Jail parameters: hostname:'%s', chroot:%s, process:'%s', bind:[%s]:%d, "
-	    "max_conns:%u, max_conns_per_ip:%u, time_limit:%" PRId64
-	    ", personality:%#lx, daemonize:%s, clone_newnet:%s, "
-	    "clone_newuser:%s, clone_newns:%s, clone_newpid:%s, clone_newipc:%s, clone_newuts:%s, "
-	    "clone_newcgroup:%s, clone_newtime:%s, keep_caps:%s, disable_no_new_privs:%s, "
-	    "max_cpus:%zu",
+	LOG_I("Jail parameters: hostname:'%s', chroot:%s, process:'%s', "
+	      "bind:[%s]:%d, "
+	      "max_conns:%u, max_conns_per_ip:%u, time_limit:%" PRId64
+	      ", personality:%#lx, daemonize:%s, clone_newnet:%s, "
+	      "clone_newuser:%s, clone_newns:%s, clone_newpid:%s, clone_newipc:%s, "
+	      "clone_newuts:%s, "
+	      "clone_newcgroup:%s, clone_newtime:%s, keep_caps:%s, "
+	      "disable_no_new_privs:%s, "
+	      "max_cpus:%zu",
 	    nsjconf->hostname.c_str(), QC(nsjconf->chroot),
 	    nsjconf->exec_file.empty() ? nsjconf->argv[0].c_str() : nsjconf->exec_file.c_str(),
 	    nsjconf->bindhost.c_str(), nsjconf->port, nsjconf->max_conns, nsjconf->max_conns_per_ip,
@@ -261,38 +308,38 @@ void logParams(nsjconf_t* nsjconf) {
 	    logYesNo(nsjconf->keep_caps), logYesNo(nsjconf->disable_no_new_privs),
 	    nsjconf->max_cpus);
 
-	for (const auto& p : nsjconf->mountpts) {
+	for (const auto &p : nsjconf->mountpts) {
 		LOG_I(
 		    "%s: %s", p.is_symlink ? "Symlink" : "Mount", mnt::describeMountPt(p).c_str());
 	}
-	for (const auto& uid : nsjconf->uids) {
+	for (const auto &uid : nsjconf->uids) {
 		LOG_I("Uid map: inside_uid:%lu outside_uid:%lu count:%zu newuidmap:%s",
 		    (unsigned long)uid.inside_id, (unsigned long)uid.outside_id, uid.count,
 		    uid.is_newidmap ? "true" : "false");
 		if (uid.outside_id == 0 && nsjconf->clone_newuser) {
-			LOG_W(
-			    "Process will be UID/EUID=0 in the global user namespace, and will "
-			    "have user root-level access to files");
+			LOG_W("Process will be UID/EUID=0 in the global user namespace, and "
+			      "will "
+			      "have user root-level access to files");
 		}
 	}
-	for (const auto& gid : nsjconf->gids) {
+	for (const auto &gid : nsjconf->gids) {
 		LOG_I("Gid map: inside_gid:%lu outside_gid:%lu count:%zu newgidmap:%s",
 		    (unsigned long)gid.inside_id, (unsigned long)gid.outside_id, gid.count,
 		    gid.is_newidmap ? "true" : "false");
 		if (gid.outside_id == 0 && nsjconf->clone_newuser) {
-			LOG_W(
-			    "Process will be GID/EGID=0 in the global user namespace, and will "
-			    "have group root-level access to files");
+			LOG_W("Process will be GID/EGID=0 in the global user namespace, and "
+			      "will "
+			      "have group root-level access to files");
 		}
 	}
 }
 
-uint64_t parseRLimit(int res, const char* optarg, unsigned long mul) {
+uint64_t parseRLimit(int res, const char *optarg, unsigned long mul) {
 	if (strcasecmp(optarg, "inf") == 0) {
 		return RLIM64_INFINITY;
 	}
 	struct rlimit64 cur;
-	if (getrlimit64(res, &cur) == -1) {
+	if (util::getrlimit(res, &cur) == -1) {
 		PLOG_F("getrlimit(%d)", res);
 	}
 	if (strcasecmp(optarg, "def") == 0 || strcasecmp(optarg, "soft") == 0) {
@@ -303,9 +350,9 @@ uint64_t parseRLimit(int res, const char* optarg, unsigned long mul) {
 	}
 	if (!util::isANumber(optarg)) {
 		LOG_F(
-		    "RLIMIT %d needs a numeric or 'max'/'hard'/'def'/'soft'/'inf' value ('%s' "
-		    "provided)",
-		    res, optarg);
+		    "RLIMIT %s (%d) needs a numeric value or 'max'/'hard'/'def'/'soft'/'inf' value "
+		    "(%s provided)",
+		    util::rLimName(res).c_str(), res, QC(optarg));
 	}
 	errno = 0;
 	uint64_t val = strtoull(optarg, NULL, 0);
@@ -315,17 +362,17 @@ uint64_t parseRLimit(int res, const char* optarg, unsigned long mul) {
 	return val * mul;
 }
 
-static std::string argFromVec(const std::vector<std::string>& vec, size_t pos) {
+static std::string argFromVec(const std::vector<std::string> &vec, size_t pos) {
 	if (pos >= vec.size()) {
 		return "";
 	}
 	return vec[pos];
 }
 
-static bool setupArgv(nsjconf_t* nsjconf, int argc, char** argv, int optind) {
+static bool setupArgv(nsjconf_t *nsjconf, int argc, char **argv, int optind) {
 	/*
-	 * If user provided cmdline via nsjail [opts] -- [cmdline], then override the one from the
-	 * config file
+	 * If user provided cmdline via nsjail [opts] -- [cmdline], then override
+	 * the one from the config file
 	 */
 	if (optind < argc) {
 		nsjconf->argv.clear();
@@ -333,7 +380,7 @@ static bool setupArgv(nsjconf_t* nsjconf, int argc, char** argv, int optind) {
 			nsjconf->argv.push_back(argv[i]);
 		}
 	}
-	if (nsjconf->exec_file.empty() && nsjconf->argv.size() > 0) {
+	if (nsjconf->exec_file.empty() && !nsjconf->argv.empty()) {
 		nsjconf->exec_file = nsjconf->argv[0];
 	}
 	if (nsjconf->exec_file.empty()) {
@@ -344,9 +391,10 @@ static bool setupArgv(nsjconf_t* nsjconf, int argc, char** argv, int optind) {
 
 	if (nsjconf->use_execveat) {
 #if !defined(__NR_execveat)
-		LOG_E(
-		    "Your nsjail is compiled without support for the execveat() syscall, yet you "
-		    "specified the --execute_fd flag");
+		LOG_E("Your nsjail is compiled without support for the execveat() "
+		      "syscall, "
+		      "yet you "
+		      "specified the --execute_fd flag");
 		return false;
 #endif /* !defined(__NR_execveat) */
 		if ((nsjconf->exec_fd = TEMP_FAILURE_RETRY(
@@ -358,14 +406,16 @@ static bool setupArgv(nsjconf_t* nsjconf, int argc, char** argv, int optind) {
 	return true;
 }
 
-static bool setupMounts(nsjconf_t* nsjconf) {
+static bool setupMounts(nsjconf_t *nsjconf) {
 	if (!(nsjconf->chroot.empty())) {
 		if (!mnt::addMountPtHead(nsjconf, nsjconf->chroot, "/", /* fstype= */ "",
 			/* options= */ "",
 			nsjconf->is_root_rw ? (MS_BIND | MS_REC | MS_PRIVATE)
 					    : (MS_BIND | MS_REC | MS_PRIVATE | MS_RDONLY),
-			/* is_dir= */ mnt::NS_DIR_YES, /* is_mandatory= */ true, /* src_env= */ "",
-			/* dst_env= */ "", /* src_content= */ "", /* is_symlink= */ false)) {
+			/* is_dir= */ mnt::NS_DIR_YES,
+			/* is_mandatory= */ true, /* src_env= */ "",
+			/* dst_env= */ "", /* src_content= */ "",
+			/* is_symlink= */ false)) {
 			return false;
 		}
 	} else {
@@ -380,8 +430,10 @@ static bool setupMounts(nsjconf_t* nsjconf) {
 	if (!nsjconf->proc_path.empty()) {
 		if (!mnt::addMountPtTail(nsjconf, /* src= */ "", nsjconf->proc_path, "proc",
 			/* options= */ "", nsjconf->is_proc_rw ? 0 : MS_RDONLY,
-			/* is_dir= */ mnt::NS_DIR_YES, /* is_mandatory= */ true, /* src_env= */ "",
-			/* dst_env= */ "", /* src_content= */ "", /* is_symlink= */ false)) {
+			/* is_dir= */ mnt::NS_DIR_YES,
+			/* is_mandatory= */ true, /* src_env= */ "",
+			/* dst_env= */ "", /* src_content= */ "",
+			/* is_symlink= */ false)) {
 			return false;
 		}
 	}
@@ -389,7 +441,7 @@ static bool setupMounts(nsjconf_t* nsjconf) {
 	return true;
 }
 
-void setupUsers(nsjconf_t* nsjconf) {
+void setupUsers(nsjconf_t *nsjconf) {
 	if (nsjconf->uids.empty()) {
 		idmap_t uid;
 		uid.inside_id = getuid();
@@ -408,19 +460,18 @@ void setupUsers(nsjconf_t* nsjconf) {
 	}
 }
 
-std::string parseMACVlanMode(const char* optarg) {
+std::string parseMACVlanMode(const char *optarg) {
 	if (strcasecmp(optarg, "private") != 0 && strcasecmp(optarg, "vepa") != 0 &&
 	    strcasecmp(optarg, "bridge") != 0 && strcasecmp(optarg, "passthru") != 0) {
-		LOG_F(
-		    "macvlan mode can only be one of the values: "
-		    "'private'/'vepa'/'bridge'/'passthru' ('%s' "
-		    "provided).",
+		LOG_F("macvlan mode can only be one of the values: "
+		      "'private'/'vepa'/'bridge'/'passthru' ('%s' "
+		      "provided).",
 		    optarg);
 	}
 	return std::string(optarg);
 }
 
-std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
+std::unique_ptr<nsjconf_t> parseArgs(int argc, char *argv[]) {
 	std::unique_ptr<nsjconf_t> nsjconf(new nsjconf_t);
 
 	nsjconf->use_execveat = false;
@@ -589,6 +640,7 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 			nsjconf->tlimit = (uint64_t)strtoull(optarg, NULL, 0);
 			break;
 		case 'h': /* help */
+			logs::logFile("", STDOUT_FILENO);
 			cmdlineUsage(argv[0]);
 			exit(0);
 			break;
@@ -728,7 +780,8 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 			std::string o_id = argFromVec(subopts, 1);
 			std::string cnt = argFromVec(subopts, 2);
 			size_t count = strtoul(cnt.c_str(), nullptr, 0);
-			if (!user::parseId(nsjconf.get(), i_id, o_id, count, /* is_gid= */ false,
+			if (!user::parseId(nsjconf.get(), i_id, o_id, count,
+				/* is_gid= */ false,
 				/* is_newidmap= */ false)) {
 				return nullptr;
 			}
@@ -739,7 +792,8 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 			std::string o_id = argFromVec(subopts, 1);
 			std::string cnt = argFromVec(subopts, 2);
 			size_t count = strtoul(cnt.c_str(), nullptr, 0);
-			if (!user::parseId(nsjconf.get(), i_id, o_id, count, /* is_gid= */ true,
+			if (!user::parseId(nsjconf.get(), i_id, o_id, count,
+				/* is_gid= */ true,
 				/* is_newidmap= */ false)) {
 				return nullptr;
 			}
@@ -750,7 +804,8 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 			std::string o_id = argFromVec(subopts, 1);
 			std::string cnt = argFromVec(subopts, 2);
 			size_t count = strtoul(cnt.c_str(), nullptr, 0);
-			if (!user::parseId(nsjconf.get(), i_id, o_id, count, /* is_gid= */ false,
+			if (!user::parseId(nsjconf.get(), i_id, o_id, count,
+				/* is_gid= */ false,
 				/* is_newidmap= */ true)) {
 				return nullptr;
 			}
@@ -761,7 +816,8 @@ std::unique_ptr<nsjconf_t> parseArgs(int argc, char* argv[]) {
 			std::string o_id = argFromVec(subopts, 1);
 			std::string cnt = argFromVec(subopts, 2);
 			size_t count = strtoul(cnt.c_str(), nullptr, 0);
-			if (!user::parseId(nsjconf.get(), i_id, o_id, count, /* is_gid= */ true,
+			if (!user::parseId(nsjconf.get(), i_id, o_id, count,
+				/* is_gid= */ true,
 				/* is_newidmap= */ true)) {
 				return nullptr;
 			}
